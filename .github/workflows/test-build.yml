@@ -1,0 +1,63 @@
+name: Test Build (Debug)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-environment:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Check files
+      run: |
+        echo "=== Checking required files ==="
+        ls -la src/bridge_generated.rs || echo "❌ Missing src/bridge_generated.rs"
+        ls -la flutter/lib/generated_bridge.dart || echo "❌ Missing flutter/lib/generated_bridge.dart"
+        ls -la Cargo.toml || echo "❌ Missing Cargo.toml"
+        ls -la flutter/pubspec.yaml || echo "❌ Missing flutter/pubspec.yaml"
+        
+        echo ""
+        echo "=== Checking Rust library ==="
+        ls -la flutter/android/app/src/main/jniLibs/arm64-v8a/ || echo "❌ No pre-built libraries"
+        
+        echo ""
+        echo "=== Environment info ==="
+        echo "Disk space:"
+        df -h
+        echo ""
+        echo "CPU info:"
+        nproc
+        echo ""
+        echo "Memory:"
+        free -h
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.24.5'
+        channel: 'stable'
+    
+    - name: Flutter doctor
+      run: flutter doctor -v
+    
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: '1.75'
+    
+    - name: Rust version
+      run: |
+        rustc --version
+        cargo --version
+    
+    - name: Test summary
+      run: |
+        echo "## Environment Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Flutter: $(flutter --version | head -1)" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Rust: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "If this passes, the full build should work." >> $GITHUB_STEP_SUMMARY

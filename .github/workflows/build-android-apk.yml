@@ -1,0 +1,113 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  RUST_VERSION: "1.75"
+  FLUTTER_VERSION: "3.24.5"
+  NDK_VERSION: "r27c"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        channel: 'stable'
+        cache: true
+    
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ env.RUST_VERSION }}
+        targets: aarch64-linux-android,armv7-linux-androideabi
+    
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk --version 3.1.2
+    
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: ${{ env.NDK_VERSION }}
+        add-to-path: true
+    
+    - name: Setup vcpkg
+      run: |
+        git clone https://github.com/microsoft/vcpkg
+        cd vcpkg
+        git checkout ${{ env.VCPKG_COMMIT_ID }}
+        ./bootstrap-vcpkg.sh
+        echo "VCPKG_ROOT=$PWD" >> $GITHUB_ENV
+    
+    - name: Install vcpkg dependencies
+      run: |
+        $VCPKG_ROOT/vcpkg install --triplet=arm64-android libvpx libyuv opus aom
+        $VCPKG_ROOT/vcpkg install --triplet=arm-neon-android libvpx libyuv opus aom
+    
+    - name: Generate Flutter Rust Bridge
+      run: |
+        cargo install flutter_rust_bridge_codegen --version 1.80.1
+        flutter_rust_bridge_codegen \
+          --rust-input ./src/flutter_ffi.rs \
+          --dart-output ./flutter/lib/generated_bridge.dart
+    
+    - name: Build Rust libraries
+      run: |
+        # Build for arm64
+        cargo ndk --platform 21 --target aarch64-linux-android build --release --features flutter
+        
+        # Build for armv7
+        cargo ndk --platform 21 --target armv7-linux-androideabi build --release --features flutter
+        
+        # Copy libraries
+        mkdir -p flutter/android/app/src/main/jniLibs/arm64-v8a
+        mkdir -p flutter/android/app/src/main/jniLibs/armeabi-v7a
+        
+        cp target/aarch64-linux-android/release/liblibrustdesk.so \
+           flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+        
+        cp target/armv7-linux-androideabi/release/liblibrustdesk.so \
+           flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
+    
+    - name: Get Flutter dependencies
+      working-directory: flutter
+      run: flutter pub get
+    
+    - name: Build APK
+      working-directory: flutter
+      run: |
+        flutter build apk --release --split-per-abi \
+          --target-platform android-arm64,android-arm
+    
+    - name: Upload APK artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-apk
+        path: |
+          flutter/build/app/outputs/flutter-apk/*.apk
+        retention-days: 30
+    
+    - name: List built APKs
+      run: |
+        echo "Built APK files:"
+        ls -lh flutter/build/app/outputs/flutter-apk/*.apk
